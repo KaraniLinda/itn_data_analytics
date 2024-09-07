@@ -1,0 +1,112 @@
+---
+title: "itn_analysis"
+output: html_document
+date: "2024-09-07"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#Load libraries
+library(tidyverse)
+library(readxl)
+library(lubridate)
+```
+
+
+```{r}
+# Load datasets
+
+chws <- read_csv("chws.csv")
+household <- read_csv("households.csv")
+referrals <- read_csv("referrals.csv")
+feedback <- read_excel("anonymous_feedback.xlsx")
+
+```
+
+```{r}
+# Exploratory data anaylysis
+# How many households already have itns/how many do not? 
+# Number of households visited by each community worker? in which regions?
+# 3176 households, 10 CHW, How many redemptions did it lead to? of those households that did not have an itn, how many redeemed itns by which chw? referral per chd? 
+# time between visit date , issue date and redemption date?
+
+# # How many households already have itns/how many do not? how many chw were allocated to these households 
+
+
+```
+
+
+```{r}
+#How many households did each cw visit, of those how many didnt have itns
+households_itn_chw <- household %>%
+  group_by(chw_id) %>%
+  summarise(
+    total_with_itn = sum(has_itn == 'TRUE'),           # Sum of TRUE values (households with ITNs)
+    total_without_itn = sum(has_itn == 'FALSE'),       # Sum of FALSE values (households without ITNs)
+    total_households = n()                   # Total number of households
+  ) %>%
+  ungroup()
+
+# View the result
+households_itn_chw
+```
+
+
+```{r}
+households_itn_reg <- household %>%
+  group_by(region) %>%
+  summarise(
+    total_with_itn = sum(has_itn == 'TRUE'),           # Sum of TRUE values (households with ITNs)
+    total_without_itn = sum(has_itn == 'FALSE'),       # Sum of FALSE values (households without ITNs)
+    total_households = n()                   # Total number of households
+  ) %>%
+  ungroup()
+
+# View the result
+households_itn_reg
+
+```
+
+
+```{r}
+
+households_itn_reg %>% 
+    summarise(households_itn = sum(total_with_itn),
+              households_without_itn = sum(total_without_itn))
+```
+
+
+```{r}
+
+# How many visits were made each month
+household_visits <- household %>%
+  # Extract month and year from visit_date
+  mutate(
+    month_year = format(visit_date, "%Y-%m")  # Format as YYYY-MM
+  ) %>%
+  group_by(month_year) %>%
+  summarise(
+    visits = n()  # Count the number of visits
+  ) %>%
+  ungroup()
+
+# View the result
+household_visits
+
+```
+
+```{r}
+#merge referral and households dataframes
+
+household_referrals <- household %>%
+  left_join(referrals, by = c("household_id", "chw_id"))
+
+# get number of household that received referral codes, of those which already had an itn
+
+
+
+```
+
