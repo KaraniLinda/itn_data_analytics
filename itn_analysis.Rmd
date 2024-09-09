@@ -8,11 +8,17 @@ date: "2024-09-07"
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+
+
 ```{r}
+options(warn = -1)  # Suppresses all warnings
+
 #Load libraries
 library(tidyverse)
 library(readxl)
 library(lubridate)
+library(sf)
+library(viridis)
 ```
 
 
@@ -22,7 +28,21 @@ library(lubridate)
 chws <- read_csv("chws.csv")
 household <- read_csv("households.csv")
 referrals <- read_csv("referrals.csv")
-feedback <- read_excel("anonymous_feedback.xlsx")
+feedback <- read_excel("anonymous_feedback.xlsx", col_names = FALSE)
+colnames(feedback) <- "feedback"
+
+# Shape file to plot heatmap
+
+# Admin level 4
+ken <- read_sf("/Users/lindakarani/Documents/gitrepo/itn_data_analytics/Ken_Locations/Ken_Locations.shp")
+
+# Admin level 3
+
+ken_cons <- read_sf("/Users/lindakarani/Documents/gitrepo/itn_data_analytics/Ken_Divisions/Ken_Divisions.shp")
+
+# Admin level 1
+
+ken_county <- read_sf("/Users/lindakarani/Documents/gitrepo/itn_data_analytics/geoBoundaries-KEN-ADM1-all/geoBoundaries-KEN-ADM1.shp")
 
 ```
 
@@ -104,8 +124,238 @@ household_visits
 household_referrals <- household %>%
   left_join(referrals, by = c("household_id", "chw_id"))
 
+View(household_referrals)
+
 # get number of household that received referral codes, of those which already had an itn
 
+# Add a column indicating if the household received a redemption code
+household_analysis <- household_referrals %>%
+  mutate(
+    received_redemption = !is.na(referral_code),
+    no_itn = !has_itn
+  )
+
+# Count households that did not have an ITN and received a redemption code
+households_with_redemption_no_itn <- household_analysis %>%
+  filter(received_redemption, no_itn) %>%
+  group_by(chw_id) %>%
+  summarise(
+    households_with_redemption_no_itn = n(),
+    .groups = 'drop'
+  )
+
+# Count households that did not have an ITN and did not receive a redemption code
+households_no_redemption_no_itn <- household_analysis %>%
+  filter(!received_redemption, no_itn) %>%
+  group_by(chw_id) %>%
+  summarise(
+    households_no_redemption_no_itn = n(),
+    .groups = 'drop'
+  )
+
+# Combine the results
+combined_results <- households_with_redemption_no_itn %>%
+  full_join(households_no_redemption_no_itn, by = c("chw_id"))
+
+# View the result
+View(combined_results)
+
+
+combined_results %>% 
+    summarise(s1 = sum(households_with_redemption_no_itn, na.rm = TRUE),
+              s2 = sum(households_no_redemption_no_itn, na.rm = TRUE))
+
+
+```
+
+
+
+```{r, warning=FALSE}
+# Perform the analysis
+chw_summary <- household_referrals %>%
+  group_by(chw_id) %>%
+  summarise(
+    total_visits = n(),                                  # Total number of visits
+    total_referrals = sum(!is.na(referral_code)), # Number of households that received a redemption code
+    total_redemptions = sum(!is.na(redemption_date)), # Number of households that redeemed the redemption code
+    .groups = 'drop'
+  ) %>% 
+    mutate(redemption_rate = (total_redemptions/total_referrals)*100)
+
+chw_summary_reg <- merge(chw_summary, chws, by = "chw_id")
+
+# View the result
+View(chw_summary_reg)
+
+# Get the total referrals and redemption
+chw_summary %>% 
+    summarise(s1 = sum(total_referrals),
+              s2 = sum(total_redemptions))
+
+# Get the average redemption rate per CHW
+
+chw_summary %>% 
+    summarise(avg_redemption_rate = mean(redemption_rate)) 
+
+
+```
+
+
+```{r, warning=FALSE}
+chw_summary2 <- household_referrals %>%
+  group_by(redemption_facility) %>%
+  summarise(                                  
+    total_redeemed_redemption = sum(!is.na(redemption_date)), # Number of households that redeemed the redemption code
+    .groups = 'drop'
+  )
+
+# View the result
+View(chw_summary2)
+```
+
+
+```{r}
+chw_summary3 <- household_referrals %>%
+  group_by(region) %>%
+ summarise(
+    total_visits = n(),                                  # Total number of visits
+    total_referrals = sum(!is.na(referral_code)), # Number of households that received a redemption code
+    total_redemptions = sum(!is.na(redemption_date)), # Number of households that redeemed the redemption code
+    .groups = 'drop'
+  ) %>% 
+    mutate(redemption_rate = (total_redemptions/total_referrals)*100)
+
+
+
+# View the result
+View(chw_summary3)
+
+# Get the average redemption rate per region
+
+chw_summary3 %>% 
+    summarise(avg_redemption_rate = mean(redemption_rate)) 
+```
+
+
+```{r, warning=FALSE}
+# Household visits, referals and redemption made each month
+
+monthly_performance <- household_referrals %>%
+  # Extract month and year from visit_date (assuming visit_date is the main reference)
+  mutate(month_year = format(visit_date, "%Y-%m")) %>%
+  group_by(month_year) %>%
+  summarise(
+    total_visits = sum(!is.na(visit_date)),          # Count the number of visits
+    total_issues = sum(!is.na(issue_date)),          # Count the number of issues
+    total_redemptions = sum(!is.na(redemption_date))  # Count the number of redemptions
+  ) %>%
+    mutate(redemption_rate = (total_redemptions/total_issues)*100) %>% 
+  ungroup()
+
+
+
+# View the result
+View(monthly_performance)
+
+```
+
+```{r}
+# Visualizations
+
+# Order chw_id based on total_visits and reshape the data to long format
+# Ensure the data frame is correctly ordered
+data_long <- chw_summary %>%
+  dplyr::select(-redemption_rate) %>%
+  mutate(
+  chw_id = factor(chw_id, levels = chw_id[order(total_visits, decreasing = TRUE)])) %>% 
+  pivot_longer(cols = c(total_visits, total_referrals, total_redemptions), 
+               names_to = "metric", 
+               values_to = "value") %>% 
+  mutate(metric = factor(metric, levels = c("total_visits", "total_referrals", "total_redemptions"))
+  )
+
+# Plot the bar chart with data labels
+ggplot(data_long, aes(x = chw_id, y = value, fill = metric)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = value), position = position_dodge(width = 0.9), vjust = -0.5, size = 2.5) +
+  labs(title = "Total visits, referrals and redemptions per community health worker",
+       x = "Community health workers",
+       y = "Totals",
+       fill = "Metric") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+
+```{r}
+# Plot heatmap
+
+nai_kiambu <- ken_county %>% 
+    dplyr::filter(shapeName %in% c("Nairobi", "Kiambu")) %>%
+    dplyr::select(shapeName) %>% 
+    rename(region = shapeName)
+
+dagoretti <- ken_cons %>% 
+     dplyr::filter(DIVNAME == "DAGORETTI") %>%
+     dplyr::select(DIVNAME) %>% 
+     rename(region = DIVNAME) %>%
+     mutate(region = ifelse(region == "DAGORETTI", "Dagoreti", region)) %>% 
+     left_join(chw_summary3, by = "region")
+
+
+
+locs <- ken %>% 
+    filter(LOCNAME %in% c("RUARAKA", "LIMURU", "JUJA", "UTHIRU/RUTHIMITU", "KASARANI", "LANGATA", "EMBAKASI", "KAWANGWARE")) %>% dplyr::select(LOCNAME) %>% 
+    rename(region = LOCNAME) %>% 
+    mutate(region = case_when(
+        region == "RUARAKA" ~ "Ruaraka",
+        region == "LIMURU" ~ "Limuru",
+        region == "JUJA" ~ "Juja",
+        region == "UTHIRU/RUTHIMITU" ~ "Uthiru",
+        region == "KASARANI" ~ "Kasarani",
+        region == "LANGATA" ~ "Lang'ata",
+        region == "EMBAKASI" ~ "Embakasi",
+        region == "KAWANGWARE" ~ "Kawangware"
+        )) %>% 
+      left_join(chw_summary3, by = "region")
+
+nai_kiambu <- st_as_sf(nai_kiambu, coords = c("longitude", "latitude"), crs = 4326)
+dagoretti <- st_as_sf(dagoretti, coords = c("longitude", "latitude"), crs = 4326)
+locs <- st_as_sf(locs, coords = c("longitude", "latitude"), crs = 4326)
+
+# Set CRS if missing (assuming EPSG:4326 as an example)
+dagoretti <- st_set_crs(dagoretti, 4326)
+locs <- st_set_crs(locs, 4326)
+
+
+ggplot() +
+  # Outer layer: Nairobi and Kiambu (for outlines)
+  geom_sf(data = nai_kiambu, fill = NA, color = "black", size = 0.8) +
+  
+  # Inner layer: Dagoretti constituency (with fill values)
+  geom_sf(data = dagoretti, aes(fill = total_redemptions), color = "lightblue", size = 0.5) +
+
+  
+  # Admin level 4 areas (with fill values)
+  geom_sf(data = locs, aes(fill = total_redemptions), color = "gray", size = 0.3, alpha = 0.7) +
+  scale_fill_gradient(low = "lightgreen", high = "darkgreen", name = "Total Redemptions") +
+  
+  
+  # Add labels and themes
+  labs(title = "Bivariate Map of Referrals and Redemptions",
+       subtitle = "Dagoretti Constituency and Admin Level 4 Areas",
+       caption = "Source: ITN Data") +
+  theme_minimal()
+)
+
+
+
+```
+
+```{r}
+# Analyze feedback data using text analysis
 
 
 ```
