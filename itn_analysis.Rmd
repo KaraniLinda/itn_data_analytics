@@ -19,6 +19,12 @@ library(readxl)
 library(lubridate)
 library(sf)
 library(viridis)
+library(tidytext)
+library(tm)
+library(wordcloud)
+library(sentimentr)
+library(plotly)
+
 ```
 
 
@@ -72,10 +78,14 @@ households_itn_chw <- household %>%
 
 # View the result
 households_itn_chw
+
+
 ```
 
 
 ```{r}
+
+# Regions with/without itns
 households_itn_reg <- household %>%
   group_by(region) %>%
   summarise(
@@ -88,11 +98,12 @@ households_itn_reg <- household %>%
 # View the result
 households_itn_reg
 
+
 ```
 
 
 ```{r}
-
+# Get total household with/without itn
 households_itn_reg %>% 
     summarise(households_itn = sum(total_with_itn),
               households_without_itn = sum(total_without_itn))
@@ -171,7 +182,8 @@ combined_results %>%
 
 
 ```{r, warning=FALSE}
-# Perform the analysis
+# Performance grouped by CHWs and region allocation
+
 chw_summary <- household_referrals %>%
   group_by(chw_id) %>%
   summarise(
@@ -202,9 +214,11 @@ chw_summary %>%
 
 
 ```{r, warning=FALSE}
+
+#Get the total number of redemptions by facilities
 chw_summary2 <- household_referrals %>%
   group_by(redemption_facility) %>%
-  summarise(                                  
+  summarise(
     total_redeemed_redemption = sum(!is.na(redemption_date)), # Number of households that redeemed the redemption code
     .groups = 'drop'
   )
@@ -215,6 +229,8 @@ View(chw_summary2)
 
 
 ```{r}
+
+#Get the performance by region
 chw_summary3 <- household_referrals %>%
   group_by(region) %>%
  summarise(
@@ -238,7 +254,7 @@ chw_summary3 %>%
 
 
 ```{r, warning=FALSE}
-# Household visits, referals and redemption made each month
+# Household visits, referals and redemption made each month(trend over time)
 
 monthly_performance <- household_referrals %>%
   # Extract month and year from visit_date (assuming visit_date is the main reference)
@@ -246,10 +262,10 @@ monthly_performance <- household_referrals %>%
   group_by(month_year) %>%
   summarise(
     total_visits = sum(!is.na(visit_date)),          # Count the number of visits
-    total_issues = sum(!is.na(issue_date)),          # Count the number of issues
+    total_referrals = sum(!is.na(referral_code)),          # Count the number of issues
     total_redemptions = sum(!is.na(redemption_date))  # Count the number of redemptions
   ) %>%
-    mutate(redemption_rate = (total_redemptions/total_issues)*100) %>% 
+    mutate(redemption_rate = (total_redemptions/total_referrals)*100) %>% 
   ungroup()
 
 
@@ -258,6 +274,23 @@ monthly_performance <- household_referrals %>%
 View(monthly_performance)
 
 ```
+
+
+```{r}
+monthly_performance_chw <- household_referrals %>%
+  # Extract month and year from visit_date (assuming visit_date is the main reference)
+  mutate(month_year = format(visit_date, "%Y-%m")) %>%
+  group_by(month_year, chw_id) %>%
+  summarise(
+    total_visits = sum(!is.na(visit_date)),          # Count the number of visits
+    total_referrals = sum(!is.na(referral_code)),          # Count the number of issues
+    total_redemptions = sum(!is.na(redemption_date))  # Count the number of redemptions
+  ) %>%
+    mutate(redemption_rate = (total_redemptions/total_referrals)*100) %>% 
+  ungroup()
+
+```
+
 
 ```{r}
 # Visualizations
@@ -289,74 +322,36 @@ ggplot(data_long, aes(x = chw_id, y = value, fill = metric)) +
 ```
 
 
+
 ```{r}
-# Plot heatmap
+# Visualize feedback data
 
-nai_kiambu <- ken_county %>% 
-    dplyr::filter(shapeName %in% c("Nairobi", "Kiambu")) %>%
-    dplyr::select(shapeName) %>% 
-    rename(region = shapeName)
+# Tokenize and clean text data
+feedback_words <- feedback %>%
+  unnest_tokens(word, feedback) %>%
+  anti_join(stop_words) %>%  # Remove common stopwords
+  filter(!word %in% c("net", "mosquitoes", "mosquito", "bed"))  # Remove irrelevant words
 
-dagoretti <- ken_cons %>% 
-     dplyr::filter(DIVNAME == "DAGORETTI") %>%
-     dplyr::select(DIVNAME) %>% 
-     rename(region = DIVNAME) %>%
-     mutate(region = ifelse(region == "DAGORETTI", "Dagoreti", region)) %>% 
-     left_join(chw_summary3, by = "region")
+# Create a word cloud
+wordcloud(feedback_words$word, min.freq = 1, max.words = 50, colors = brewer.pal(8, "Dark2"))
 
+# Sentiment analysis using the 'sentimentr' package
+sentiment_scores <- sentiment(feedback$feedback)
 
-
-locs <- ken %>% 
-    filter(LOCNAME %in% c("RUARAKA", "LIMURU", "JUJA", "UTHIRU/RUTHIMITU", "KASARANI", "LANGATA", "EMBAKASI", "KAWANGWARE")) %>% dplyr::select(LOCNAME) %>% 
-    rename(region = LOCNAME) %>% 
-    mutate(region = case_when(
-        region == "RUARAKA" ~ "Ruaraka",
-        region == "LIMURU" ~ "Limuru",
-        region == "JUJA" ~ "Juja",
-        region == "UTHIRU/RUTHIMITU" ~ "Uthiru",
-        region == "KASARANI" ~ "Kasarani",
-        region == "LANGATA" ~ "Lang'ata",
-        region == "EMBAKASI" ~ "Embakasi",
-        region == "KAWANGWARE" ~ "Kawangware"
-        )) %>% 
-      left_join(chw_summary3, by = "region")
-
-nai_kiambu <- st_as_sf(nai_kiambu, coords = c("longitude", "latitude"), crs = 4326)
-dagoretti <- st_as_sf(dagoretti, coords = c("longitude", "latitude"), crs = 4326)
-locs <- st_as_sf(locs, coords = c("longitude", "latitude"), crs = 4326)
-
-# Set CRS if missing (assuming EPSG:4326 as an example)
-dagoretti <- st_set_crs(dagoretti, 4326)
-locs <- st_set_crs(locs, 4326)
-
-
-ggplot() +
-  # Outer layer: Nairobi and Kiambu (for outlines)
-  geom_sf(data = nai_kiambu, fill = NA, color = "black", size = 0.8) +
-  
-  # Inner layer: Dagoretti constituency (with fill values)
-  geom_sf(data = dagoretti, aes(fill = total_redemptions), color = "lightblue", size = 0.5) +
-
-  
-  # Admin level 4 areas (with fill values)
-  geom_sf(data = locs, aes(fill = total_redemptions), color = "gray", size = 0.3, alpha = 0.7) +
-  scale_fill_gradient(low = "lightgreen", high = "darkgreen", name = "Total Redemptions") +
-  
-  
-  # Add labels and themes
-  labs(title = "Bivariate Map of Referrals and Redemptions",
-       subtitle = "Dagoretti Constituency and Admin Level 4 Areas",
-       caption = "Source: ITN Data") +
+# Visualization: Sentiment score bar plot
+ggplot(sentiment_scores, aes(x = element_id, y = sentiment)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(title = "Sentiment Analysis of User Feedback",
+       x = "Feedback ID",
+       y = "Sentiment Score") +
   theme_minimal()
-)
 
-
-
-```
-
-```{r}
-# Analyze feedback data using text analysis
+# Calculate the average sentiment score
+average_sentiment <- mean(sentiment_scores$sentiment)
+cat("Average Sentiment Score:", average_sentiment, "\n")
 
 
 ```
+
+
 
